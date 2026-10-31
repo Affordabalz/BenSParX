@@ -1,0 +1,61 @@
+name: synthetic-data-pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_full_cv:
+        description: "Also run the full (slow) nested CV"
+        type: boolean
+        default: false
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Generate synthetic data
+        run: python generate_synthetic_data.py --rows 2000 --seed 42 --out synthetic_glycemia_data
+      - name: Convert to BenSParX format
+        run: python prepare_for_bensparx.py synthetic_glycemia_data.csv BenSParX_synthetic.csv
+      - name: Smoke test
+        run: python smoke_test.py BenSParX_synthetic.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-data
+          path: |
+            synthetic_glycemia_data.csv
+            synthetic_glycemia_data.xlsx
+            BenSParX_synthetic.csv
+
+  full-cv:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_full_cv
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: |
+          python generate_synthetic_data.py --rows 2000 --seed 42 --out synthetic_glycemia_data
+          python prepare_for_bensparx.py synthetic_glycemia_data.csv BenSParX_synthetic.csv
+          sed 's#/content/BenSParX.csv#BenSParX_synthetic.csv#' bensparx_nested_cv.py > run_cv.py
+          python run_cv.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cv-results
+          path: |
+            final_metrics.csv
+            predictions_*.csv
